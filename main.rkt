@@ -4,8 +4,7 @@
          "hash-util.rkt"
          racket/string
          racket/list
-         racket/pretty
-         racket/format)
+         racket/date)
 
 (define $space-char
   (<?> (oneOf " \t") "space or tab"))
@@ -43,14 +42,34 @@
 (define $true-lit  (pdo (string "true")  (return #t)))
 (define $false-lit (pdo (string "false") (return #f)))
 
+(define ->num (compose string->number list->string list))
+(define 4dig (pdo-seq $digit $digit $digit $digit #:combine-with ->num))
+(define 2dig (pdo-seq $digit $digit #:combine-with ->num))
+
+(define $datetime-lit
+  ;; 1979-05-27T07:32:00Z
+  (try (pdo (year <- 4dig)
+            (char #\-)
+            (month <- 2dig)
+            (char #\-)
+            (day <- 2dig)
+            (char #\T)
+            (hr <- 2dig)
+            (char #\:)
+            (mn <- 2dig)
+            (char #\:)
+            (sc <- 2dig)
+            (char #\Z)
+            (return (date->seconds (date sc mn hr day month year 0 0 #f 0))))))
+
 (define ($array state) ($_array state)) ;; "forward decl"
 
 (define $val
   (<or> $true-lit
         $false-lit ;try before $numeric-lit. "fa" in "false" could be hex
+        $datetime-lit ;try before $numeric-list
         $numeric-lit
         $string-lit
-        ;; $datetime-lit  ;;TO-DO
         $array))
 
 (define $key-char ;; valid for a key
@@ -160,7 +179,12 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (module+ test
-  (require rackunit)
+  (require rackunit
+           racket/format)
+  (check-equal?
+   (parse-toml @~a{today = 2014-06-26T12:34:56Z
+                   })
+   '#hasheq((today . 1403800496)))
   (check-equal?
    (parse-toml @~a{[[aot.sub]] #comment
                    aot0 = 10
