@@ -123,30 +123,27 @@
             (x <- (group keys))
             (return x))))
 
+(define (array-of-tables key-parser)
+  (try (pdo $sp
+            (keys <- (lookAhead (between (string "[[")
+                                         (string "]]")
+                                         key-parser)))
+            (xs <- (many1 (array-of-table-item keys)))
+            (return (hash-sets (make-immutable-hasheq)
+                               keys
+                               (list->vector xs))))))
+
 (define $array-of-tables
-  (<?> (try (pdo $sp
-                 (keys <- (lookAhead (between (string "[[") (string "]]")
-                                              $table-keys)))
-                 (xs <- (many1 (array-of-table-item keys)))
-                 (return (hash-sets (make-immutable-hasheq)
-                                    keys
-                                    (list->vector xs)))))
-       "array of tables"))
+  (<?> (array-of-tables $table-keys)
+       "any array of tables"))
 
 (define (array-of-tables/under parent-keys)
-  (<?> (try (pdo $sp
-                 (keys <-
-                       (lookAhead
-                        (between (string "[[") (string "]]")
-                                 (pdo (string (string-join (map symbol->string parent-keys) "."))
-                                      (char #\.)
-                                      (keys <- $table-keys)
-                                      (return (append parent-keys keys))))))
-                 (xs <- (many1 (array-of-table-item keys)))
-                 (return (hash-sets (make-immutable-hasheq)
-                                    keys
-                                    (list->vector xs)))))
-       "array of tables"))
+  (<?> (array-of-tables
+        (pdo (string (string-join (map symbol->string parent-keys) "."))
+             (char #\.)
+             (keys <- $table-keys)
+             (return (append parent-keys keys))))
+       (format "array of tables under keys ~a" parent-keys)))
 
 (define $toml-document
   (pdo (many $blank-or-comment-line)
