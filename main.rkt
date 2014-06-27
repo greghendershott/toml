@@ -106,10 +106,13 @@
             $sp
             (return (cons key val)))))
 
+(define (keys->string ks)
+  (string-join (map symbol->string ks) "."))
+
 (define (err ks v0 v1)
   (eprintf "conflicting values for key~a `~a'\n~a\n~a\n"
            (if (= 1 (length ks)) "" "s")
-           (string-join (map symbol->string (reverse ks)) ".")
+           (keys->string ks)
            v0 v1))
 
 (define $key/val-top
@@ -138,7 +141,7 @@
          (for ([kv kvs])
            (match-define (cons k v) kv)
            (cond [(hash-has-key? ht k)
-                  (err (list k) (hash-ref ht k) v)
+                  (err (snoc keys k) (hash-ref ht k) v)
                   (ec $err)]
                  [else (hash-set! ht k v)]))
          (return null))))
@@ -183,9 +186,18 @@
 (define $table-keys ;; >> (listof symbol?)
   (sepBy1 $table-key (char #\.)))
 
-(define $table
+(define (table-keys-under parent-keys)
+  (pdo (if (empty? parent-keys)
+           (return null)
+           (pdo (string (keys->string parent-keys))
+                (char #\.)))
+       (keys <- $table-keys)
+       (return (append parent-keys keys))))
+
+(define (table-under parent-keys)
   (<?> (try (pdo $sp
-                 (keys <- (between (char #\[) (char #\]) $table-keys))
+                 (keys <- (between (char #\[) (char #\])
+                                   (table-keys-under parent-keys)))
                  $sp (<or> $comment $newline)
                  (many $blank-or-comment-line)
                  (key/val-table keys)
@@ -193,16 +205,37 @@
                  $sp))
        "table"))
 
-(define $array-of-tables
+(define $table (table-under '()))
+
+(define (array-of-tables-under parent-keys)
   (<?> (try (pdo $sp
-                 (keys <- (between (string "[[") (string "]]") $table-keys))
+                 (keys <- (between (string "[[") (string "]]")
+                                   (table-keys-under parent-keys)))
                  $sp (<or> $comment $newline)
                  (many $blank-or-comment-line)
                  (key/val-array keys)
+                 (many (<or> (table-under keys)
+                             (array-of-tables-under keys)))
+                 (many (array-of-tables-same keys))
                  (many $blank-or-comment-line)
                  $sp))
        "array-of-tables"))
             
+(define (array-of-tables-same keys)
+  (<?> (try (pdo $sp
+                 (between (string "[[") (string "]]")
+                          (string (keys->string keys)))
+                 $sp (<or> $comment $newline)
+                 (many $blank-or-comment-line)
+                 (key/val-array keys)
+                 (many (<or> (table-under keys)
+                             (array-of-tables-under keys)))
+                 (many $blank-or-comment-line)
+                 $sp))
+       "array-of-tables"))
+
+(define $array-of-tables (array-of-tables-under '()))
+
 (define $toml-document
   (pdo (many $blank-or-comment-line)
        $key/val-top
