@@ -4,7 +4,8 @@
          "hash-util.rkt"
          racket/string
          racket/list
-         racket/date)
+         racket/date
+         racket/function)
 
 (define $space-char
   (<?> (oneOf " \t") "space or tab"))
@@ -43,24 +44,24 @@
 (define $false-lit (pdo (string "false") (return #f)))
 
 (define ->num (compose string->number list->string list))
-(define 4dig (pdo-seq $digit $digit $digit $digit #:combine-with ->num))
-(define 2dig (pdo-seq $digit $digit #:combine-with ->num))
+(define $4d (pdo-seq $digit $digit $digit $digit #:combine-with ->num))
+(define $2d (pdo-seq $digit $digit #:combine-with ->num))
 
 (define $datetime-lit
   ;; 1979-05-27T07:32:00Z
-  (try (pdo (year <- 4dig)
+  (try (pdo (yr <- $4d)
             (char #\-)
-            (month <- 2dig)
+            (mo <- $2d)
             (char #\-)
-            (day <- 2dig)
+            (dy <- $2d)
             (char #\T)
-            (hr <- 2dig)
+            (hr <- $2d)
             (char #\:)
-            (mn <- 2dig)
+            (mn <- $2d)
             (char #\:)
-            (sc <- 2dig)
+            (sc <- $2d)
             (char #\Z)
-            (return (date->seconds (date sc mn hr day month year 0 0 #f 0))))))
+            (return (date->seconds (date sc mn hr dy mo yr 0 0 #f 0))))))
 
 (define ($array state) ($_array state)) ;; "forward decl"
 
@@ -72,8 +73,16 @@
         $string-lit
         $array))
 
-(define $key-char ;; valid for a key
-  (<or> $alphaNum (oneOf "-!@#$%^&*|/")))
+(define $table-key-char
+  (<or> $alphaNum (oneOf "~!@#$^&*()_+-`\\|/?><,;:'")))
+
+(define $table-key ;; >> symbol?
+  (<?> (pdo (cs <- (many1 $table-key-char))
+            (return (string->symbol (list->string cs))))
+       "table key"))
+
+(define $key-char
+  (<or> $alphaNum $table-key-char (oneOf "[].")))
 
 (define $key ;; >> symbol?
   (<?> (pdo (cs <- (many1 $key-char))
@@ -81,13 +90,13 @@
        "key"))
 
 (define $key/val ;; >> (cons/c symbol? $val)
-  (pdo $sp (key <- $key) $sp
-       (char #\=)
-       $sp (val <- $val) $sp
-       (<or> $comment $newline)
-       (many $blank-or-comment-line)
-       $sp
-       (return (hasheq key val))))
+  (try (pdo $sp (key <- $key) $sp
+            (char #\=)
+            $sp (val <- $val) $sp
+            (<or> $comment $newline)
+            (many $blank-or-comment-line)
+            $sp
+            (return (hasheq key val)))))
 
 (define $_array
   ;; Note: TOML array item types are not allowed to be mixed. However
@@ -103,10 +112,10 @@
                               $spnl
                               (return v))))
             (char #\])
-            (return (list->vector vs)))))
+            (return vs))))
 
 (define $table-keys ;; >> (listof symbol?)
-  (sepBy1 $key (char #\.)))
+  (sepBy1 $table-key (char #\.)))
 
 (define $table
   (try (pdo $sp
@@ -118,8 +127,8 @@
             $sp
             (return (hash-sets (make-immutable-hasheq)
                                keys
-                               (foldl hasheq-merge
-                                      (make-immutable-hash)
+                               (foldl (curryr hasheq-merge (reverse keys))
+                                      (make-immutable-hasheq)
                                       kvs))))))
 
 (define (group keys)
@@ -130,11 +139,13 @@
        ;; "Hoist up" the hasheq's to same level as `keys`
        (tabs <- (return (for/list ([tab tabs]) (hash-refs tab keys))))
        (aots <- (return (for/list ([aot aots]) (hash-refs aot keys))))
-       (return (foldl hasheq-merge
+       (return (foldl (curryr hasheq-merge (reverse keys))
                       (make-immutable-hasheq)
                       (append kvs tabs aots)))))
 
-(define (array-of-table-item keys)
+;; array-of-table/item : (listof symbol?) >> hasheq?
+;; Parse one [[keys]] item for an array of tables.
+(define (array-of-table/item keys)
   (try (pdo (between (string "[[") (string "]]") 
                      (string (string-join (map symbol->string keys) ".")))
             $sp (<or> $comment $newline)
@@ -142,20 +153,22 @@
             (x <- (group keys))
             (return x))))
 
-(define (array-of-tables key-parser)
+(define (array-of-tables $key)
   (try (pdo $sp
-            (keys <- (lookAhead (between (string "[[")
-                                         (string "]]")
-                                         key-parser)))
-            (xs <- (many1 (array-of-table-item keys)))
+            (keys <- (lookAhead (between (string "[[") (string "]]") $key)))
+            (xs <- (many1 (array-of-table/item keys)))
             (return (hash-sets (make-immutable-hasheq)
                                keys
-                               (list->vector xs))))))
+                               xs)))))
 
+;; Parse any array of tables. To be used at the "top level".
 (define $array-of-tables
   (<?> (array-of-tables $table-keys)
        "any array of tables"))
 
+;; Parse only an array of tables that is "under" parent-keys. e.g. If
+;; parent-keys is '(foo bar), meaning that we're in an array-of-tables
+;; [[[foo.bar]], then only parse [[foo.bar.x]].
 (define (array-of-tables/under parent-keys)
   (<?> (array-of-tables
         (pdo (string (string-join (map symbol->string parent-keys) "."))
@@ -166,13 +179,17 @@
 
 (define $toml-document
   (pdo (many $blank-or-comment-line)
-       (xs <- (many $key/val))
-       (ys <- (many (<or> $table $array-of-tables)))
+       (kvs <- (many $key/val))
+       (tabs <- (many $table))
+       (aots <- (many $array-of-tables))
        $eof
        (return (foldl hasheq-merge
                       (make-immutable-hasheq)
-                      (append xs ys)))))
+                      (append kvs tabs aots)))))
 
+;; Returns a `hasheq` using the same conventions as the Racket `json`
+;; library. e.g. You should be able to give the result to
+;; `jsexpr->string`.
 (define (parse-toml s)
   (parse-result $toml-document (string-append s "\n\n")))
 
@@ -202,9 +219,9 @@
              .
              #hasheq((sub
                       .
-                      #(#hasheq((aot0 . 10) (aot1 . 11))
-                        #hasheq((aot0 . 20) (aot1 . 21))
-                        #hasheq((aot0 . 30) (aot1 . 31))))))))
+                      (#hasheq((aot0 . 10) (aot1 . 11))
+                       #hasheq((aot0 . 20) (aot1 . 21))
+                       #hasheq((aot0 . 30) (aot1 . 31))))))))
 
   (check-equal?
    (parse-toml @~a{# Comment blah blah
@@ -249,14 +266,14 @@
              .
              #hasheq((sub
                       .
-                      #(#hasheq((aot0 . 10) (aot1 . 11))
-                        #hasheq((aot0 . 20) (aot1 . 21))
-                        #hasheq((aot0 . 30) (aot1 . 31))))))
+                      (#hasheq((aot0 . 10) (aot1 . 11))
+                       #hasheq((aot0 . 20) (aot1 . 21))
+                       #hasheq((aot0 . 30) (aot1 . 31))))))
             (ten . 10)
-            (array0 . #(1 2 3))
-            (array1 . #(1 2 3))
-            (array2 . #(1 2 3))
-            (nested-array . #(#(1 2 3) #(4 5 6)))
+            (array0 . (1 2 3))
+            (array1 . (1 2 3))
+            (array2 . (1 2 3))
+            (nested-array . ((1 2 3) (4 5 6)))
             (key0
              .
              #hasheq((key1 . #hasheq((x . 1) (y . 1)))
@@ -276,11 +293,11 @@
                    })
    '#hasheq((fruit
              .
-             #(#hasheq((name . "apple")
-                       (physical
-                        .
-                        #hasheq((color . "red") (shape . "round"))))
-               #hasheq((name . "banana"))))))
+             (#hasheq((name . "apple")
+                      (physical
+                       .
+                       #hasheq((color . "red") (shape . "round"))))
+              #hasheq((name . "banana"))))))
   (check-equal?
    (parse-toml @~a{[[fruit]]
                    name = "apple"
@@ -303,15 +320,55 @@
                    })
    '#hasheq((fruit
              .
-             #(#hasheq((name . "apple")
-                       (physical
-                        .
-                        #hasheq((color . "red") (shape . "round")))
-                       (variety
-                        .
-                        #(#hasheq((name . "red delicious"))
-                          #hasheq((name . "granny smith")))))
-               #hasheq((name . "banana")
-                       (variety
-                        .
-                        #(#hasheq((name . "plantain"))))))))))
+             (#hasheq((name . "apple")
+                      (physical
+                       .
+                       #hasheq((color . "red") (shape . "round")))
+                      (variety
+                       .
+                       (#hasheq((name . "red delicious"))
+                        #hasheq((name . "granny smith")))))
+              #hasheq((name . "banana")
+                      (variety
+                       .
+                       (#hasheq((name . "plantain")))))))))
+  ;; https://github.com/toml-lang/toml/issues/214
+  (check-equal?
+   (parse-toml @~a{[[foo.bar]]})
+   (parse-toml @~a{[foo]
+                   [[foo.bar]]}))
+  ;; example from TOML README
+  (check-exn
+   #rx"conflicting values for keys `fruit.variety.name'\ngranny smith\nred delicious"
+   (λ () (parse-toml @~a{# INVALID TOML DOC
+                         [[fruit]]
+                         name = "apple"
+
+                         [[fruit.variety]]
+                         name = "red delicious"
+
+                         # This table conflicts with the previous table
+                         [fruit.variety]
+                         name = "granny smith"})))
+  ;; https://github.com/toml-lang/toml/pull/199#issuecomment-47300021
+  ;; Note: My original parser model FAILS this. The tables and arrays
+  ;; of tables may come in ANY order!
+  #;
+  (check-equal?
+   (parse-toml @~a{[table]
+                   key = 5
+
+                   [[table.array]]
+                   a = 1
+                   b = 2
+
+                   [another table]
+                   key = 10
+
+                   [[table.array]]
+                   a = 2
+                   b = 4})
+   #hasheq((|another table| . #hasheq((key . 5)))
+           (table . #hasheq((key . 5)
+                            (array . (#hasheq((a . 1) (b . 2))
+                                      #hasheq((a . 2) (b . 4)))))))))
