@@ -9,6 +9,10 @@
          racket/contract
          racket/match)
 
+(provide parse-toml)
+
+;;; Whitespace and comments
+
 (define $space-char
   (<?> (oneOf " \t") "space or tab"))
 
@@ -31,6 +35,8 @@
 (define $blank-or-comment-line
   (<or> $blank-line $comment))
 
+;;; Literal values
+
 (define $string-lit
   (<?> (try (pdo (char #\")
                  (cs <- (manyUntil $anyChar (char #\")))
@@ -51,17 +57,9 @@
 
 (define $datetime-lit
   ;; 1979-05-27T07:32:00Z
-  (try (pdo (yr <- $4d)
-            (char #\-)
-            (mo <- $2d)
-            (char #\-)
-            (dy <- $2d)
+  (try (pdo (yr <- $4d) (char #\-) (mo <- $2d) (char #\-) (dy <- $2d)
             (char #\T)
-            (hr <- $2d)
-            (char #\:)
-            (mn <- $2d)
-            (char #\:)
-            (sc <- $2d)
+            (hr <- $2d) (char #\:) (mn <- $2d) (char #\:) (sc <- $2d)
             (char #\Z)
             (return (date->seconds (date sc mn hr dy mo yr 0 0 #f 0))))))
 
@@ -69,49 +67,11 @@
 
 (define $val
   (<or> $true-lit
-        $false-lit ;try before $numeric-lit. "fa" in "false" could be hex
-        $datetime-lit ;try before $numeric-list
+        $false-lit ;before $numeric-lit. "fa" in "false" could be hex
+        $datetime-lit ;before $numeric-lit. dates start with number
         $numeric-lit
         $string-lit
         $array))
-
-;; Valid chars for both normal keys and table keys
-(define $common-key-char
-  (<or> $alphaNum (oneOf "~!@#$^&*()_+-`\\|/?><,;:'")))
-
-(define $table-key-char
-  (<or> $common-key-char (oneOf " ")))
-
-(define $key-char
-  (<or> $common-key-char (oneOf "[].")))
-
-(define $table-key ;; >> symbol?
-  (<?> (pdo (cs <- (many1 $table-key-char))
-            (return (string->symbol (list->string cs))))
-       "table key"))
-
-(define $key ;; >> symbol?
-  (<?> (pdo (cs <- (many1 $key-char))
-            (return (string->symbol (list->string cs))))
-       "key"))
-
-(define $key/val ;; >> (cons/c symbol? $val)
-  (try (pdo $sp (key <- $key) $sp
-            (char #\=)
-            $sp (val <- $val) $sp
-            (<or> $comment $newline)
-            (many $blank-or-comment-line)
-            $sp
-            (return (cons key val)))))
-
-(define (keys->string ks)
-  (string-join (map symbol->string ks) "."))
-
-(define (err ks v0 v1)
-  (eprintf "conflicting values for key~a `~a'\n~a\n~a\n"
-           (if (= 1 (length ks)) "" "s")
-           (keys->string ks)
-           v0 v1))
 
 (define $_array
   ;; FIXME: TOML array item types are not allowed to be mixed. To
@@ -149,6 +109,43 @@
 ;;             (char #\])
 ;;             (return vs))))
 
+
+;;; Keys for key = val pairs and for tables and arrays of tables
+
+;; Valid chars for both normal keys and table keys
+(define $common-key-char
+  (<or> $alphaNum (oneOf "~!@#$^&*()_+-`\\|/?><,;:'")))
+
+(define $table-key-char
+  (<or> $common-key-char (oneOf " ")))
+
+(define $key-char
+  (<or> $common-key-char (oneOf "[].")))
+
+(define $table-key ;; >> symbol?
+  (<?> (pdo (cs <- (many1 $table-key-char))
+            (return (string->symbol (list->string cs))))
+       "table key"))
+
+(define $key ;; >> symbol?
+  (<?> (pdo (cs <- (many1 $key-char))
+            (return (string->symbol (list->string cs))))
+       "key"))
+
+(define $key/val ;; >> (cons/c symbol? $val)
+  (try (pdo $sp (key <- $key) $sp
+            (char #\=)
+            $sp (val <- $val) $sp
+            (<or> $comment $newline)
+            (many $blank-or-comment-line)
+            $sp
+            (return (cons key val)))))
+
+;;; Table keys, handled as #\. separated
+
+(define (keys->string ks)
+  (string-join (map symbol->string ks) "."))
+
 (define $table-keys ;; >> (listof symbol?)
   (sepBy1 $table-key (char #\.)))
 
@@ -159,6 +156,8 @@
                 (char #\.)))
        (keys <- $table-keys)
        (return (append parent-keys keys))))
+
+;;; Tables
 
 (define (table-under parent-keys)
   (<?> (try (pdo $sp
@@ -173,6 +172,8 @@
        "table"))
 
 (define $table (table-under '()))
+
+;;; Arrays of tables
 
 (define (array-of-tables-under parent-keys)
   (<?> (try (pdo $sp
@@ -191,12 +192,6 @@
                          [aot0 (merge (append (pairs->hasheqs '() kvs) ts))]
                          [aots (cons aot0 aots)])
                     (match-define (list all-but-k ... k) keys)
-                    ;; (local-require racket/pretty)
-                    ;; (displayln "===array-of-tables-under===")
-                    ;; (pretty-print all-but-k)
-                    ;; (pretty-print k)
-                    ;; (pretty-print ts)
-                    ;; (pretty-print aots)
                     (pair->hasheq all-but-k
                                   (cons k aots))))))
        "array-of-tables"))
@@ -218,6 +213,8 @@
 
 (define $array-of-tables (array-of-tables-under '()))
 
+;;; A complete TOML document
+
 (define $toml-document
   (pdo (many $blank-or-comment-line)
        (kvs <- (many $key/val))
@@ -226,19 +223,19 @@
        (return (merge (append (pairs->hasheqs '() kvs)
                               ts)))))
 
-;; Returns a `hasheq` using the same conventions as the Racket `json`
-;; library. e.g. You should be able to give the result to
-;; `jsexpr->string`.
+;; Main, public function. Returns a `hasheq` using the same
+;; conventions as the Racket `json` library. e.g. You should be able
+;; to give the result to `jsexpr->string`.
 (define (parse-toml s)
   (parse-result $toml-document (string-append s "\n\n")))
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; misc utils
 
-(define (merge hts)
+;;; misc utils
+
+(define (merge hts) ;; (listof hasheq?) -> hasheq?
   (foldl hasheq-merge (hasheq) hts))
 
-(define (pair->hasheq keys pair)
+(define (pair->hasheq keys pair) ;; (listof symbol?) pair? -> hasheq?
   (match keys
     [(list) (hasheq (car pair) (cdr pair))]
     [(list* this more) (hasheq this (pair->hasheq more pair))]))
@@ -254,21 +251,6 @@
 
 (define (pairs->hasheqs keys pairs)
   (map (curry pair->hasheq keys) pairs))
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-;; (require racket/format
-;;          racket/pretty)
-;; (pretty-print
-;;  (parse-toml @~a{a = 1
-;;                  b = 2
-;;                  [x]
-;;                  a = 1
-;;                  [[aot]]
-;;                  x=0
-;;                  [[aot]]
-;;                  x=1
-;;                  }))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; tests
