@@ -427,8 +427,8 @@
                          [fruit.variety]
                          name = "granny smith"})))
   ;; https://github.com/toml-lang/toml/pull/199#issuecomment-47300021
-  ;; Note: My original parser model FAILS this. The tables and arrays
-  ;; of tables may come in ANY order!
+  ;; The tables and arrays of tables may come in ANY order. A plain table
+  ;; may come "in the middle" of a nested table definition.
   (check-equal?
    (parse-toml @~a{[table]
                    key = 5
@@ -443,7 +443,7 @@
                    [[table.array]]
                    a = 2
                    b = 4})
-   #hasheq((|another table| . #hasheq((key . 5)))
+   #hasheq((|another table| . #hasheq((key . 10)))
            (table . #hasheq((key . 5)
                             (array . (#hasheq((a . 1) (b . 2))
                                       #hasheq((a . 2) (b . 4)))))))))

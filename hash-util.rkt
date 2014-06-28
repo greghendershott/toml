@@ -43,7 +43,9 @@
                 0))
 
 ;; Merge two hasheq's h0 and h1. When both have values for a key that
-;; are hasheqs, do a recursive hasheq-merge. Otherwise h1 prevails.
+;; are both hasheqs, do a recursive hasheq-merge. When both have
+;; values for a key that are boht lists, append the lists. Otherwise
+;; raise an error.
 (define/contract (hasheq-merge h0 h1 [keys '()])
   (->* ((and/c immutable? hash?) (and/c immutable? hash?))
        ((listof symbol?))
@@ -57,8 +59,13 @@
   (for/fold ([h0 h0])
             ([(k v1) (in-hash h1)])
     (hash-set h0 k
-              (cond [(hash? v1)
-                     (define v0 (hash-ref h0 k (make-immutable-hasheq)))
+              (cond [(list? v1)
+                     (define v0 (hash-ref h0 k (list)))
+                     (unless (list? v0)
+                       (err (cons k keys) v0 v1))
+                     (append v0 v1)]
+                    [(hash? v1)
+                     (define v0 (hash-ref h0 k (hasheq)))
                      (unless (hash? v0)
                        (err (cons k keys) v0 v1))
                      (hasheq-merge v1 v0 (cons k keys))]
