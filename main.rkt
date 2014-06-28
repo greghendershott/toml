@@ -11,6 +11,35 @@
 
 (provide parse-toml)
 
+;;; stx
+
+;; Parsac automatically provides error messages with positions for
+;; _syntax_ errors. To do so also for _semantic_ errors -- e.g. hash
+;; conflicts -- we need to tag the source datums with pos info. Much
+;; like Racket syntax objects. Unlike Racket syntax, it may be
+;; sufficient for us to tag only _some_ of the input, such as
+;; $key/val, for adequate error messages.
+
+(struct stx (e pos) #:transparent)
+
+;; Strip all stx structs rescursively. Analogous to Racket's
+;; `syntax->datum`.
+(define (stx->dat v)
+  (match v
+    [(? hash? ht) (for/hasheq ([(k v) (in-hash ht)]) (values k (stx->dat v)))]
+    [(? list? xs) (for/list ([x (in-list xs)]) (stx->dat x))]
+    [(stx e _)    e]
+    [v            v]))
+
+;; Depth-first search for the first value that's a stx? and return its
+;; pos converted to a line:col:ofs string, or #f if none found.
+(define (find-pos v)
+  (match v
+    [(? hash? ht) (for/or ([(k v) (in-hash ht)]) (find-pos v))]
+    [(? list? xs) (for/or ([x (in-list xs)]) (find-pos x))]
+    [(stx _ (Pos line col ofs)) (format "~a:~a:~a:" line col ofs)]
+    [v #f]))
+
 ;;; Whitespace and comments
 
 (define $space-char
@@ -132,14 +161,17 @@
             (return (string->symbol (list->string cs))))
        "key"))
 
-(define $key/val ;; >> (cons/c symbol? $val)
+(define $key/val ;; >> (cons/c symbol? stx?)
   (try (pdo $sp (key <- $key) $sp
             (char #\=)
-            $sp (val <- $val) $sp
+            $sp
+            (pos <- (getPosition))
+            (val <- $val)
+            $sp
             (<or> $comment $newline)
             (many $blank-or-comment-line)
             $sp
-            (return (cons key val)))))
+            (return (cons key (stx val pos))))))
 
 ;;; Table keys, handled as #\. separated
 
@@ -231,8 +263,69 @@
 ;; conventions as the Racket `json` library. e.g. You should be able
 ;; to give the result to `jsexpr->string`.
 (define (parse-toml s)
-  (parse-result $toml-document (string-append s "\n\n")))
+  (stx->dat (parse-result $toml-document (string-append s "\n\n"))))
 
+
+;;; hasheq-merge
+
+;; Merge two hasheq's h0 and h1.
+;;
+;; When a key exists in only one, use its value.
+;;
+;; When a key exists in both, when the values are
+;;  - both hasheqs? do a recursive hasheq-merge
+;;  - both lists? append the lists
+;   - otherwise raise an error.
+(define/contract (hasheq-merge h0 h1 [keys '()])
+  (->* ((and/c immutable? hash?) (and/c immutable? hash?))
+       ((listof symbol?))
+       (and/c immutable? hash?))
+  (for/fold ([h0 h0])
+            ([(k v1) h1])
+    (hash-set h0 k
+              (cond [(list? v1)
+                     (define v0 (hash-ref h0 k (list)))
+                     (unless (list? v0)
+                       (err (cons k keys) v0 v1))
+                     (append v0 v1)]
+                    [(hash? v1)
+                     (define v0 (hash-ref h0 k (hasheq)))
+                     (unless (hash? v0)
+                       (err (cons k keys) v0 v1))
+                     (hasheq-merge v1 v0 (cons k keys))]
+                    [(hash-has-key? h0 k)
+                     (err (cons k keys) (hash-ref h0 k) v1)]
+                    [else v1]))))
+
+(define (err ks v0 v1)
+  (local-require json)
+  (error 'toml
+         "conflicting values for `~a'\n~a ~a\n~a ~a"
+         (string-join (map symbol->string (reverse ks)) ".")
+         (and (find-pos v0) "") (jsexpr->string (stx->dat v0))
+         (and (find-pos v1) "") (jsexpr->string (stx->dat v1))))
+
+(module+ test
+  (check-equal?
+   (hasheq-merge (hasheq 'foo "bar"
+                         'bar "baz"
+                         'baz (hasheq 'a "a")
+                         'xs (list (hasheq 'x0 10 'x1 11)))
+                 (hasheq 'a "a"
+                         'baz (hasheq 'b "b")
+                         'xs (list (hasheq 'x0 20 'x1 21))))
+   (hasheq 'foo "bar"
+           'bar "baz"
+           'a "a"
+           'baz (hasheq 'a "a"
+                        'b "b")
+           'xs (list (hasheq 'x0 10 'x1 11)
+                     (hasheq 'x0 20 'x1 21))))
+  (check-exn #rx"conflicting values for `a.b.c'"
+             (λ ()
+               (hasheq-merge
+                (hasheq 'a (hasheq 'b (hasheq 'c 0)))
+                (hasheq 'a (hasheq 'b (hasheq 'c 1)))))))
 
 ;;; misc utils
 
@@ -433,3 +526,19 @@
            (table . #hasheq((key . 5)
                             (array . (#hasheq((a . 1) (b . 2))
                                       #hasheq((a . 2) (b . 4)))))))))
+
+
+(require racket/format
+         racket/pretty)
+#;
+(pretty-print
+ (parse-toml @~a{# INVALID TOML DOC
+                 [[fruit]]
+                 name = "apple"
+
+                 [[fruit.variety]]
+                 name = "red delicious"
+
+                 # This table conflicts with the previous table
+                 [fruit.variety]
+                 name = "granny smith"}))

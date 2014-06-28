@@ -22,7 +22,8 @@
                   getState setState withState
                   State State? Consumed Consumed! Empty Ok Error Msg
                   parse parse-result parsack-error parse-source
-                  incr-pos))
+                  incr-pos
+                  Pos))
 
 (provide pdo
          pdo-one
@@ -45,4 +46,11 @@
          getState setState withState
          State State? Consumed Consumed! Empty Ok Error Msg
          parse parse-result parsack-error parse-source
-         incr-pos)
+         incr-pos
+         Pos)
+
+(define (getPosition)
+  (match-lambda
+   [(and state (State _ pos -))
+    (Empty (Ok pos state (Msg pos "" null)))]))
+(provide getPosition)
