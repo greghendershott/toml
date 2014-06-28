@@ -24,12 +24,10 @@
   (check-equal? (hash-sets (make-immutable-hasheq) '(a b c) 0)
                 #hasheq([a . #hasheq([b . #hasheq([c . 0])])])))
 
-(define/contract (hash-refs ht keys)
-  (-> (and/c immutable? hash?) (listof symbol?)
-      any/c)
-  (for/fold ([ht ht])
-            ([key (in-list keys)])
-    (hash-ref ht key)))
+(define (hash-refs ht keys)
+  (match keys
+    [(list)         ht]
+    [(list* k more) (hash-refs (hash-ref ht k) more)]))
 
 (module+ test
   (require rackunit)
