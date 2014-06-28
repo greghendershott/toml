@@ -40,20 +40,18 @@
   (check-equal? (hash-refs #hasheq([a . #hasheq([b . #hasheq([c . 0])])]) '(a b c))
                 0))
 
-;; Merge two hasheq's h0 and h1. When both have values for a key that
-;; are both hasheqs, do a recursive hasheq-merge. When both have
-;; values for a key that are boht lists, append the lists. Otherwise
-;; raise an error.
+;; Merge two hasheq's h0 and h1.
+;;
+;; When a key exists in only one, use its value.
+;;
+;; When a key exists in both, when the values are
+;;  - both hasheqs? do a recursive hasheq-merge
+;;  - both lists? append the lists
+;   - otherwise raise an error.
 (define/contract (hasheq-merge h0 h1 [keys '()])
   (->* ((and/c immutable? hash?) (and/c immutable? hash?))
        ((listof symbol?))
        (and/c immutable? hash?))
-  (define (err ks v0 v1)
-    (error 'toml
-           "conflicting values for key~a `~a'\n~a\n~a"
-           (if (= 1 (length ks)) "" "s")
-           (string-join (map symbol->string (reverse ks)) ".")
-           v0 v1))
   (for/fold ([h0 h0])
             ([(k v1) (in-hash h1)])
     (hash-set h0 k
@@ -71,18 +69,30 @@
                      (err (cons k keys) (hash-ref h0 k) v1)]
                     [else v1]))))
 
+(define (err ks v0 v1)
+  (local-require json)
+  (error 'toml
+         "conflicting values for `~a'\n~a\n~a"
+         (string-join (map symbol->string (reverse ks)) ".")
+         (jsexpr->string v0)
+         (jsexpr->string v1)))
+
 (module+ test
   (check-equal?
    (hasheq-merge (hasheq 'foo "bar"
                          'bar "baz"
-                         'baz (hasheq 'a "a"))
+                         'baz (hasheq 'a "a")
+                         'xs (list (hasheq 'x0 10 'x1 11)))
                  (hasheq 'a "a"
-                         'baz (hasheq 'b "b")))
+                         'baz (hasheq 'b "b")
+                         'xs (list (hasheq 'x0 20 'x1 21))))
    (hasheq 'foo "bar"
            'bar "baz"
            'a "a"
            'baz (hasheq 'a "a"
-                        'b "b")))
+                        'b "b")
+           'xs (list (hasheq 'x0 10 'x1 11)
+                     (hasheq 'x0 20 'x1 21))))
   (check-exn #rx"conflicting values for keys `a.b.c'\n0\n1"
              (λ ()
                (hasheq-merge
