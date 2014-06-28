@@ -1,19 +1,13 @@
 #lang at-exp racket/base
 
 (require "parsack.rkt"
+         "hash-util.rkt"
          racket/string
          racket/list
          racket/date
          racket/function
          racket/contract
          racket/match)
-
-;; FIXME: Not thread safe. Instead: Use a parameter, or pass it
-;; through Parsack State.user.
-(define *ht* (make-hasheq))
-
-(define (snoc xs x)
-  (append xs (list x)))
 
 (define $space-char
   (<?> (oneOf " \t") "space or tab"))
@@ -81,16 +75,20 @@
         $string-lit
         $array))
 
-(define $table-key-char
+;; Valid chars for both normal keys and table keys
+(define $common-key-char
   (<or> $alphaNum (oneOf "~!@#$^&*()_+-`\\|/?><,;:'")))
+
+(define $table-key-char
+  (<or> $common-key-char (oneOf " ")))
+
+(define $key-char
+  (<or> $common-key-char (oneOf "[].")))
 
 (define $table-key ;; >> symbol?
   (<?> (pdo (cs <- (many1 $table-key-char))
             (return (string->symbol (list->string cs))))
        "table key"))
-
-(define $key-char
-  (<or> $alphaNum $table-key-char (oneOf "[].")))
 
 (define $key ;; >> symbol?
   (<?> (pdo (cs <- (many1 $key-char))
@@ -115,61 +113,10 @@
            (keys->string ks)
            v0 v1))
 
-(define $key/val-top
-  (pdo (kvs <- (many $key/val))
-       (let/ec ec
-         (for ([kv kvs])
-           (match-define (cons k v) kv)
-           (cond [(hash-has-key? *ht* k)
-                  (err (list k) (hash-ref *ht* k) v)
-                  (ec $err)]
-                 [else (hash-set! *ht* k v)]))
-         (return null))))
-
-(define (key/val-table keys)
-  (pdo (kvs <- (many $key/val))
-       (let/ec ec
-         (define ht (for/fold ([ht *ht*])
-                              ([key keys])
-                      (match (hash-ref ht key 'N/A)
-                        [(? hash? ht) ht]
-                        ['N/A         (define new-ht (make-hasheq))
-                                      (hash-set! ht key new-ht)
-                                      new-ht]
-                        [v            (err keys #f v)
-                                      (ec $err)])))
-         (for ([kv kvs])
-           (match-define (cons k v) kv)
-           (cond [(hash-has-key? ht k)
-                  (err (snoc keys k) (hash-ref ht k) v)
-                  (ec $err)]
-                 [else (hash-set! ht k v)]))
-         (return null))))
-
-(define (key/val-array keys)
-  (pdo (kvs <- (many $key/val))
-       (let/ec ec
-         (match-define (list parent-keys ... list-key) keys)
-         (define ht (for/fold ([ht *ht*])
-                              ([key parent-keys])
-                      (match (hash-ref ht key 'N/A)
-                        [(? hash? ht) ht]
-                        ['N/A         (define new-ht (make-hasheq))
-                                      (hash-set! ht key new-ht)
-                                      new-ht]
-                        [v            (err keys #f v)
-                                      (ec $err)])))
-         (define xs (hash-ref ht list-key (list)))
-         (unless (list? xs)
-           (eprintf "expected array\n")
-           (ec $err))
-         (hash-set! ht list-key
-                    (snoc xs (make-hasheq kvs)))
-         (return null))))
-
 (define $_array
-  ;; Note: TOML array item types are not allowed to be mixed. However
-  ;; I think that's a semantic issue not a parsing issue (?).
+  ;; FIXME: TOML array item types are not allowed to be mixed. To
+  ;; handle this with parsing (vs. semantically), we could insist on
+  ;; same parser used for first item, for the remaining items.
   (try (pdo $sp
             (char #\[)
             $sp (optional $comment)
@@ -182,6 +129,25 @@
                               (return v))))
             (char #\])
             (return vs))))
+;; (define $_array
+;;   (<or> (array-of (<or> $true-lit $false-lit))
+;;         (array-of $datetime-lit)
+;;         (array-of $numeric-lit)
+;;         (array-of $string-lit)
+;;         (array-of $_array)))
+;; (define (array-of $value-parser)
+;;   (try (pdo $sp
+;;             (char #\[)
+;;             $sp (optional $comment)
+;;             (vs <- (many (pdo $spnl
+;;                               (v <- $value-parser)
+;;                               (optional (char #\,))
+;;                               $sp (optional $comment)
+;;                               (many $blank-or-comment-line)
+;;                               $spnl
+;;                               (return v))))
+;;             (char #\])
+;;             (return vs))))
 
 (define $table-keys ;; >> (listof symbol?)
   (sepBy1 $table-key (char #\.)))
@@ -200,9 +166,10 @@
                                    (table-keys-under parent-keys)))
                  $sp (<or> $comment $newline)
                  (many $blank-or-comment-line)
-                 (key/val-table keys)
+                 (kvs <- (many $key/val))
                  (many $blank-or-comment-line)
-                 $sp))
+                 $sp
+                 (return (merge (pairs->hasheqs keys kvs)))))
        "table"))
 
 (define $table (table-under '()))
@@ -213,12 +180,25 @@
                                    (table-keys-under parent-keys)))
                  $sp (<or> $comment $newline)
                  (many $blank-or-comment-line)
-                 (key/val-array keys)
-                 (many (<or> (table-under keys)
-                             (array-of-tables-under keys)))
-                 (many (array-of-tables-same keys))
+                 (kvs <- (many $key/val))
+                 (ts  <- (many (<or> (table-under keys)
+                                     (array-of-tables-under keys))))
+                 (aots <- (many (array-of-tables-same keys)))
                  (many $blank-or-comment-line)
-                 $sp))
+                 $sp
+                 (return
+                  (let* ([ts (map (curryr hash-refs keys) ts)] ;hoist up
+                         [aot0 (merge (append (pairs->hasheqs '() kvs) ts))]
+                         [aots (cons aot0 aots)])
+                    (match-define (list all-but-k ... k) keys)
+                    ;; (local-require racket/pretty)
+                    ;; (displayln "===array-of-tables-under===")
+                    ;; (pretty-print all-but-k)
+                    ;; (pretty-print k)
+                    ;; (pretty-print ts)
+                    ;; (pretty-print aots)
+                    (pair->hasheq all-but-k
+                                  (cons k aots))))))
        "array-of-tables"))
             
 (define (array-of-tables-same keys)
@@ -227,69 +207,71 @@
                           (string (keys->string keys)))
                  $sp (<or> $comment $newline)
                  (many $blank-or-comment-line)
-                 (key/val-array keys)
-                 (many (<or> (table-under keys)
-                             (array-of-tables-under keys)))
+                 (kvs <- (many $key/val))
+                 (ts  <- (many (<or> (table-under keys)
+                                     (array-of-tables-under keys))))
                  (many $blank-or-comment-line)
-                 $sp))
+                 $sp
+                 (return (merge (append (pairs->hasheqs '() kvs)
+                                        (map (curryr hash-refs keys) ts))))))
        "array-of-tables"))
 
 (define $array-of-tables (array-of-tables-under '()))
 
 (define $toml-document
   (pdo (many $blank-or-comment-line)
-       $key/val-top
-       (many (<or> $table $array-of-tables))
+       (kvs <- (many $key/val))
+       (ts  <- (many (<or> $table $array-of-tables)))
        $eof
-       (return (hasheq->immutable-hasheq *ht*))))
+       (return (merge (append (pairs->hasheqs '() kvs)
+                              ts)))))
 
 ;; Returns a `hasheq` using the same conventions as the Racket `json`
 ;; library. e.g. You should be able to give the result to
 ;; `jsexpr->string`.
 (define (parse-toml s)
-  (set! *ht* (make-hasheq))
   (parse-result $toml-document (string-append s "\n\n")))
 
-(define/contract (hasheq->immutable-hasheq ht)
-  (-> hash? (and/c hash? immutable?))
-  (for/hasheq ([(k v) (in-hash ht)])
-    (values k (cond [(and (hash? v) (not (immutable? v)))
-                     (hasheq->immutable-hasheq v)]
-                    [(list? v)
-                     (for/list ([v (in-list v)])
-                       (cond [(and (hash? v) (not (immutable? v)))
-                              (hasheq->immutable-hasheq v)]
-                             [else v]))]
-                    [else v]))))
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; misc utils
 
-(require racket/format
-         racket/pretty)
-#;
-(pretty-print
-(parse-toml @~a{a=1
-                b=2
-                b=3
-                [b]
-                x=1
-                
-                [table.key]
-                a=1
-                b=2
-                
-                [[aot.sub]] #comment
-                aot0 = 10
-                aot1 = 11
+(define (merge hts)
+  (foldl hasheq-merge (hasheq) hts))
 
-                [[aot.sub]] #comment
-                aot0 = 20
-                aot1 = 21
+(define (pair->hasheq keys pair)
+  (match keys
+    [(list) (hasheq (car pair) (cdr pair))]
+    [(list* this more) (hasheq this (pair->hasheq more pair))]))
 
-                [[aot.sub]] #comment
-                aot0 = 30
-                aot1 = 31
-                }))
+(module+ test
+  (require rackunit)
+  (check-equal? (pair->hasheq '() '(x . 0))
+                (hasheq 'x 0))
+  (check-equal? (pair->hasheq '(a) '(x . 0))
+                (hasheq 'a (hasheq 'x 0)))
+  (check-equal? (pair->hasheq '(a b) '(x . 0))
+                (hasheq 'a (hasheq 'b (hasheq 'x 0)))))
+
+(define (pairs->hasheqs keys pairs)
+  (map (curry pair->hasheq keys) pairs))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; (require racket/format
+;;          racket/pretty)
+;; (pretty-print
+;;  (parse-toml @~a{a = 1
+;;                  b = 2
+;;                  [x]
+;;                  a = 1
+;;                  [[aot]]
+;;                  x=0
+;;                  [[aot]]
+;;                  x=1
+;;                  }))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; tests
 
 (module+ test
   (require rackunit
@@ -373,7 +355,6 @@
              .
              #hasheq((key1 . #hasheq((x . 1) (y . 1)))
                      (key2 . #hasheq((x . 1) (y . 1)))))))
-  #;
   (check-equal?
    (parse-toml @~a{[[fruit]]
                    name = "apple"
@@ -428,15 +409,13 @@
                        .
                        (#hasheq((name . "plantain")))))))))
   ;; https://github.com/toml-lang/toml/issues/214
-  #;
   (check-equal?
    (parse-toml @~a{[[foo.bar]]})
    (parse-toml @~a{[foo]
                    [[foo.bar]]}))
   ;; example from TOML README
-  #;
   (check-exn
-   #rx"conflicting values for keys `fruit.variety.name'\ngranny smith\nred delicious"
+   #rx"conflicting values for key"
    (λ () (parse-toml @~a{# INVALID TOML DOC
                          [[fruit]]
                          name = "apple"
@@ -450,7 +429,6 @@
   ;; https://github.com/toml-lang/toml/pull/199#issuecomment-47300021
   ;; Note: My original parser model FAILS this. The tables and arrays
   ;; of tables may come in ANY order!
-  #;
   (check-equal?
    (parse-toml @~a{[table]
                    key = 5
