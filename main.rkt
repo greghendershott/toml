@@ -103,7 +103,7 @@
             (char #\T)
             (hr <- $2d) (char #\:) (mn <- $2d) (char #\:) (sc <- $2d)
             (char #\Z)
-            (return (date->seconds (date sc mn hr dy mo yr 0 0 #f 0))))))
+            (return (date sc mn hr dy mo yr 0 0 #f 0)))))
 
 (define ($array state) ($_array state)) ;; "forward decl"
 
@@ -372,7 +372,7 @@
   (check-equal?
    (parse-toml @~a{today = 2014-06-26T12:34:56Z
                    })
-   '#hasheq((today . 1403800496)))
+   `#hasheq((today . ,(date 56 34 12 26 6 2014 0 0 #f 0))))
   (check-equal?
    (parse-toml @~a{[[aot.sub]] #comment
                    aot0 = 10
