@@ -168,7 +168,8 @@
                  (kvs <- (many $key/val))
                  (many $blank-or-comment-line)
                  $sp
-                 (return (merge (pairs->hasheqs keys kvs)))))
+                 (return (merge (pairs->hasheqs keys kvs)
+                                keys))))
        "table"))
 
 (define $table (table-under '()))
@@ -182,14 +183,15 @@
                  $sp (<or> $comment $newline)
                  (many $blank-or-comment-line)
                  (kvs <- (many $key/val))
-                 (ts  <- (many (<or> (table-under keys)
-                                     (array-of-tables-under keys))))
+                 (tbs  <- (many (<or> (table-under keys)
+                                      (array-of-tables-under keys))))
                  (aots <- (many (array-of-tables-same keys)))
                  (many $blank-or-comment-line)
                  $sp
                  (return
-                  (let* ([ts (map (curryr hash-refs keys) ts)] ;hoist up
-                         [aot0 (merge (append (pairs->hasheqs '() kvs) ts))]
+                  (let* ([tbs (map (curryr hash-refs keys) tbs)] ;hoist up
+                         [aot0 (merge (append (pairs->hasheqs '() kvs) tbs)
+                                      keys)]
                          [aots (cons aot0 aots)])
                     (match-define (list all-but-k ... k) keys)
                     (pair->hasheq all-but-k
@@ -203,12 +205,14 @@
                  $sp (<or> $comment $newline)
                  (many $blank-or-comment-line)
                  (kvs <- (many $key/val))
-                 (ts  <- (many (<or> (table-under keys)
-                                     (array-of-tables-under keys))))
+                 (tbs  <- (many (<or> (table-under keys)
+                                      (array-of-tables-under keys))))
                  (many $blank-or-comment-line)
                  $sp
-                 (return (merge (append (pairs->hasheqs '() kvs)
-                                        (map (curryr hash-refs keys) ts))))))
+                 (return
+                  (let ([tbs (map (curryr hash-refs keys) tbs)]) ;hoist up
+                    (merge (append (pairs->hasheqs '() kvs) tbs)
+                           keys)))))
        "array-of-tables"))
 
 (define $array-of-tables (array-of-tables-under '()))
@@ -218,10 +222,10 @@
 (define $toml-document
   (pdo (many $blank-or-comment-line)
        (kvs <- (many $key/val))
-       (ts  <- (many (<or> $table $array-of-tables)))
+       (tbs <- (many (<or> $table $array-of-tables)))
        $eof
-       (return (merge (append (pairs->hasheqs '() kvs)
-                              ts)))))
+       (return (merge (append (pairs->hasheqs '() kvs) tbs)
+                      '()))))
 
 ;; Main, public function. Returns a `hasheq` using the same
 ;; conventions as the Racket `json` library. e.g. You should be able
@@ -232,8 +236,8 @@
 
 ;;; misc utils
 
-(define (merge hts) ;; (listof hasheq?) -> hasheq?
-  (foldl hasheq-merge (hasheq) hts))
+(define (merge hts keys) ;; (listof hasheq?) (listof symbol?) -> hasheq?
+  (foldl (curryr hasheq-merge keys) (hasheq) hts))
 
 (define (pair->hasheq keys pair) ;; (listof symbol?) pair? -> hasheq?
   (match keys
@@ -397,7 +401,7 @@
                    [[foo.bar]]}))
   ;; example from TOML README
   (check-exn
-   #rx"conflicting values for key"
+   #rx"conflicting values for `fruit.variety'"
    (λ () (parse-toml @~a{# INVALID TOML DOC
                          [[fruit]]
                          name = "apple"
