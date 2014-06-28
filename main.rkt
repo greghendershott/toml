@@ -72,9 +72,22 @@
                  (return (list->string cs))))
        "double-quoted string value"))
 
-(define $numeric-lit
-  (<?> (try (pdo (ds <- (many1 (<or> $hexDigit (char #\.))))
-                 (return (string->number (list->string ds)))))
+(define $optional-sign
+  (<or> (>> (char #\-) (return '(#\-)))
+        (return '())))
+
+(define $integer-lit
+  (<?> (try (pdo (ss <- $optional-sign)
+                 (xs <- (many1 $hexDigit))
+                 (return (string->number (list->string (append ss xs))))))
+       "numeric value"))
+
+(define $float-lit
+  (<?> (try (pdo (ss <- $optional-sign)
+                 (xs <- (many1 $digit))
+                 (char #\.)
+                 (ys <- (many1 $hexDigit))
+                 (return (string->number (list->string (append ss xs '(#\.) ys))))))
        "numeric value"))
 
 (define $true-lit  (pdo (string "true")  (return #t)))
@@ -98,7 +111,8 @@
   (<or> $true-lit
         $false-lit ;before $numeric-lit. "fa" in "false" could be hex
         $datetime-lit ;before $numeric-lit. dates start with number
-        $numeric-lit
+        $float-lit
+        $integer-lit
         $string-lit
         $array))
 
