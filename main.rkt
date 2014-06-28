@@ -66,9 +66,27 @@
 
 ;;; Literal values
 
+(define $string-char
+  (<or> (pdo
+         (char #\\)
+         (<or> (>> (char #\b) (return #\backspace))
+               (>> (char #\n) (return #\newline))
+               (>> (char #\f) (return #\page))
+               (>> (char #\r) (return #\return))
+               (>> (char #\t) (return #\tab))
+               (>> (char #\\) (return #\\))
+               (>> (char #\") (return #\"))
+               (>> (char #\/) (return #\/))
+               (pdo (oneOf "uU")
+                    (cs <- (many $hexDigit))
+                    (return (integer->char (string->number (list->string cs)
+                                                           16))))
+               ))
+        (noneOf "\"\\")))
+
 (define $string-lit
   (<?> (try (pdo (char #\")
-                 (cs <- (manyUntil $anyChar (char #\")))
+                 (cs <- (manyUntil $string-char (char #\")))
                  (return (list->string cs))))
        "double-quoted string value"))
 
