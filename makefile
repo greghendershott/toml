@@ -15,6 +15,6 @@ test: raco-test toml-test
 raco-test:
 	raco test -x .
 
-toml-test:
+toml-test: setup #setup for speed
 	(export GOPATH=~/go; export PATH=$(PWD):~/go:$(PATH); ~/go/bin/toml-test toml-test.rkt)
 
