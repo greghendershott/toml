@@ -23,7 +23,8 @@
                   State State? Consumed Consumed! Empty Ok Error Msg
                   parse parse-result parsack-error parse-source
                   incr-pos
-                  Pos))
+                  Pos
+                  exn:fail:parsack?))
 
 (provide pdo
          pdo-one
@@ -47,7 +48,8 @@
          State State? Consumed Consumed! Empty Ok Error Msg
          parse parse-result parsack-error parse-source
          incr-pos
-         Pos)
+         Pos
+         exn:fail:parsack?)
 
 (define (getPosition)
   (match-lambda

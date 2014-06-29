@@ -297,7 +297,7 @@
 ;; When a key exists in both, when the values are
 ;;  - both hasheqs? do a recursive hasheq-merge
 ;;  - both lists? append the lists
-;   - otherwise raise an error.
+;;   - otherwise raise an error.
 (define/contract (hasheq-merge h0 h1 [keys '()])
   (->* ((and/c immutable? hash?) (and/c immutable? hash?))
        ((listof symbol?))
@@ -305,7 +305,7 @@
   (for/fold ([h0 h0])
             ([(k v1) h1])
     (hash-set h0 k
-              (cond [(list? v1)
+              (cond [(list? v1) ;; array of tables
                      (define v0 (hash-ref h0 k (list)))
                      (unless (list? v0)
                        (err (cons k keys) v0 v1))
@@ -352,7 +352,23 @@
 ;;; misc utils
 
 (define (merge hts keys) ;; (listof hasheq?) (listof symbol?) -> hasheq?
+  (catch-redefs hts)
   (foldl (curryr hasheq-merge keys) (hasheq) hts))
+
+(define (catch-redefs hts)
+  (let loop ([hts hts])
+    (match hts
+      [(cons ht0 more)
+       (for ([ht1 (in-list more)])
+         (when (equal? ht0 ht1)
+           (error 'toml "redefinition of `~a'" (keys->string (ht->keys ht0)))))
+       (loop more)]
+      [_ (void)])))
+
+(define (ht->keys ht)
+  (match ht
+    [(hash-table (k v)) (cons k (ht->keys v))]
+    [_ '()]))
 
 (define (kvs->hasheq keys pairs [orig-keys keys])
   ;; (listof symbol?) (listof (list/c symbol? any/c)) -> hasheq?
@@ -388,9 +404,52 @@
                 '#hasheq((a . #hasheq((b . #hasheq())))))
   (check-equal? (parse-toml @~a{today = 2014-06-26T12:34:56Z})
                 `#hasheq((today . ,(date 56 34 12 26 6 2014 0 0 #f 0))))
+  ;; toml-tests: `duplicate-keys`
   (check-exn #rx"conflicting values for `x'"
              (λ () (parse-toml @~a{x=1
                                    x=2})))
+  ;; toml-tests: `duplicate-tables`
+  (check-exn #rx"redefinition of `a'"
+             (λ () (parse-toml @~a{[a]
+                                   [a]})))
+  ;; toml-tests: table-sub-empty
+  (check-equal? (parse-toml @~a{[a]
+                                [a.b]})
+                '#hasheq((a . #hasheq((b . #hasheq())))))
+;; My own test for duplicate tables
+  (check-exn #rx"redefinition of `a.b'"
+             (λ () (parse-toml @~a{[a.b]
+                                   [a.C]
+                                   [a.b]
+                                   })))
+  (check-exn #rx"redefinition of `a'"
+             (λ () (parse-toml @~a{[a]
+                                   [b]
+                                   [a]
+                                   })))
+  ;; README examples
+  (check-equal? (parse-toml @~a{[a.b]
+                                c = 1
+                                [a]
+                                d = 2})
+                '#hasheq((a . #hasheq((b . #hasheq((c . 1)))
+                                      (d . 2)))))
+  (check-exn #rx"redefinition of `a'"
+             (λ () (parse-toml @~a{[a]
+                                   b = 1
+                                   [a]
+                                   c = 2})))
+  (check-exn #rx"conflicting values for `a.b'"
+             (λ () (parse-toml @~a{[a]
+                                   b = 1
+                                   [a.b]
+                                   c = 2})))
+  (check-exn exn:fail:parsack? (λ () (parse-toml "[]")))
+  (check-exn exn:fail:parsack? (λ () (parse-toml "[a.]")))
+  (check-exn exn:fail:parsack? (λ () (parse-toml "[a..b]")))
+  (check-exn exn:fail:parsack? (λ () (parse-toml "[.b]")))
+  (check-exn exn:fail:parsack? (λ () (parse-toml "[.]")))
+  (check-exn exn:fail:parsack? (λ () (parse-toml " = 0")))
   (check-equal?
    (parse-toml @~a{[[aot.sub]] #comment
                    aot0 = 10
@@ -558,19 +617,3 @@
            (table . #hasheq((key . 5)
                             (array . (#hasheq((a . 1) (b . 2))
                                       #hasheq((a . 2) (b . 4)))))))))
-
-
-(require racket/format
-         racket/pretty)
-#;
-(pretty-print
- (parse-toml @~a{# INVALID TOML DOC
-                 [[fruit]]
-                 name = "apple"
-
-                 [[fruit.variety]]
-                 name = "red delicious"
-
-                 # This table conflicts with the previous table
-                 [fruit.variety]
-                 name = "granny smith"}))
