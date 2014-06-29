@@ -144,13 +144,11 @@
 (define (array-of $value-parser)
   (try (pdo $sp
             (char #\[)
-            $sp (optional $comment)
+            $spnl (many $blank-or-comment-line)
             (vs <- (many (pdo $spnl
                               (v <- $value-parser)
                               (optional (char #\,))
-                              $sp (optional $comment)
-                              (many $blank-or-comment-line)
-                              $spnl
+                              $spnl (many $blank-or-comment-line)
                               (return v))))
             (char #\])
             (return vs))))
@@ -185,7 +183,9 @@
        "key"))
 
 (define $key/val ;; >> (list/c symbol? stx?)
-  (try (pdo $sp (key <- $key) $sp
+  (try (pdo $sp
+            (key <- $key)
+            $sp
             (char #\=)
             $sp
             (pos <- (getPosition))
@@ -277,6 +277,7 @@
   (pdo (many $blank-or-comment-line)
        (kvs <- (many $key/val))
        (tbs <- (many (<or> $table $array-of-tables)))
+       (many $blank-or-comment-line)
        $eof
        (return (merge (cons (kvs->hasheq '() kvs) tbs)
                       '()))))
@@ -287,7 +288,7 @@
 ;;; are parsed to Racket `date` struct values, which do NOT satisfy
 ;;; `jsexpr?`.
 (define (parse-toml s) ;; string? -> almost-jsexpr?
-  (stx->dat (parse-result $toml-document (string-append s "\n\n"))))
+  (stx->dat (parse-result $toml-document (string-append s "\n\n\n"))))
 
 
 ;;; hasheq-merge
