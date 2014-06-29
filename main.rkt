@@ -11,6 +11,8 @@
 
 (provide parse-toml)
 
+(module+ test (require rackunit))
+
 ;;; stx
 
 ;; Parsac automatically provides error messages with positions for
@@ -134,15 +136,15 @@
         $string-lit
         $array))
 
-(define $_array
-  ;; FIXME: TOML array item types are not allowed to be mixed. To
-  ;; handle this with parsing (vs. semantically), we could insist on
-  ;; same parser used for first item, for the remaining items.
+;; TOML arrays require items to have same type. To handle this with
+;; parsing (vs. semantically), we insist that same literal parser be
+;; used for all items.
+(define (array-of $value-parser)
   (try (pdo $sp
             (char #\[)
             $sp (optional $comment)
             (vs <- (many (pdo $spnl
-                              (v <- $val)
+                              (v <- $value-parser)
                               (optional (char #\,))
                               $sp (optional $comment)
                               (many $blank-or-comment-line)
@@ -150,26 +152,13 @@
                               (return v))))
             (char #\])
             (return vs))))
-;; (define $_array
-;;   (<or> (array-of (<or> $true-lit $false-lit))
-;;         (array-of $datetime-lit)
-;;         (array-of $numeric-lit)
-;;         (array-of $string-lit)
-;;         (array-of $_array)))
-;; (define (array-of $value-parser)
-;;   (try (pdo $sp
-;;             (char #\[)
-;;             $sp (optional $comment)
-;;             (vs <- (many (pdo $spnl
-;;                               (v <- $value-parser)
-;;                               (optional (char #\,))
-;;                               $sp (optional $comment)
-;;                               (many $blank-or-comment-line)
-;;                               $spnl
-;;                               (return v))))
-;;             (char #\])
-;;             (return vs))))
-
+(define $_array
+  (<or> (array-of (<or> $true-lit $false-lit))
+        (array-of $datetime-lit)
+        (array-of $float-lit)
+        (array-of $integer-lit)
+        (array-of $string-lit)
+        (array-of $array)))
 
 ;;; Keys for key = val pairs and for tables and arrays of tables
 
@@ -370,7 +359,6 @@
     [(list* this more) (hasheq this (kvs->hasheq more pairs))]))
 
 (module+ test
-  (require rackunit)
   (check-equal? (kvs->hasheq '() '([x 0][y 1]))
                 (hasheq 'x 0 'y 1))
   (check-equal? (kvs->hasheq '(a) '([x 0][y 1]))
@@ -384,8 +372,7 @@
 ;; tests
 
 (module+ test
-  (require rackunit
-           racket/format)
+  (require racket/format)
   (check-equal?
    (parse-toml @~a{[a]})
    '#hasheq((a . #hasheq())))
