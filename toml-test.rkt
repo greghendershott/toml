@@ -24,23 +24,11 @@
                          'value
                          (parameterize ([date-display-format 'iso-8601])
                            (string-append (date->string d #t) "Z")))]
-    [(? list? xs) (cond [(and (not (empty? xs))
+    [(? list? xs) (cond [(and (not (empty? xs)) ;an array of tables?
                               (hash? (first xs))) (for/list ([x xs])
                                                     (type-jsexpr x))]
-                        [else (hasheq 'type "array"
+                        [else (hasheq 'type "array" ;a table value
                                       'value (for/list ([x xs])
                                                (type-jsexpr x)))])]
     [(? hash? ht) (for/hasheq ([(k v) (in-hash ht)])
                     (values k (type-jsexpr v)))]))
-
-#;
-(pretty-print
- (type-jsexpr
-  (hasheq 'a 0
-          'b 1
-          'c 2.0
-          'array (list 1 2 3)
-          'aot (list (hasheq 'a 0)
-                     (hasheq 'b 0))
-          'date (seconds->date (current-seconds))
-          )))
