@@ -193,7 +193,7 @@
             (return (string->symbol (list->string cs))))
        "key"))
 
-(define $key/val ;; >> (cons/c symbol? stx?)
+(define $key/val ;; >> (list/c symbol? stx?)
   (try (pdo $sp (key <- $key) $sp
             (char #\=)
             $sp
@@ -203,7 +203,7 @@
             (<or> $comment $newline)
             (many $blank-or-comment-line)
             $sp
-            (return (cons key (stx val pos))))))
+            (return (list key (stx val pos))))))
 
 ;;; Table keys, handled as #\. separated
 
@@ -232,8 +232,7 @@
                  (kvs <- (many $key/val))
                  (many $blank-or-comment-line)
                  $sp
-                 (return (merge (pairs->hasheqs keys kvs)
-                                keys))))
+                 (return (kvs->hasheq keys kvs))))
        "table"))
 
 (define $table (table-under '()))
@@ -254,12 +253,12 @@
                  $sp
                  (return
                   (let* ([tbs (map (curryr hash-refs keys) tbs)] ;hoist up
-                         [aot0 (merge (append (pairs->hasheqs '() kvs) tbs)
+                         [aot0 (merge (cons (kvs->hasheq '() kvs) tbs)
                                       keys)]
                          [aots (cons aot0 aots)])
                     (match-define (list all-but-k ... k) keys)
-                    (pair->hasheq all-but-k
-                                  (cons k aots))))))
+                    (kvs->hasheq all-but-k
+                                 (list (list k aots)))))))
        "array-of-tables"))
             
 (define (array-of-tables-same keys)
@@ -275,7 +274,7 @@
                  $sp
                  (return
                   (let ([tbs (map (curryr hash-refs keys) tbs)]) ;hoist up
-                    (merge (append (pairs->hasheqs '() kvs) tbs)
+                    (merge (cons (kvs->hasheq '() kvs) tbs)
                            keys)))))
        "array-of-tables"))
 
@@ -288,7 +287,7 @@
        (kvs <- (many $key/val))
        (tbs <- (many (<or> $table $array-of-tables)))
        $eof
-       (return (merge (append (pairs->hasheqs '() kvs) tbs)
+       (return (merge (cons (kvs->hasheq '() kvs) tbs)
                       '()))))
 
 ;; Main, public function. Returns a `hasheq` using the same
@@ -364,22 +363,22 @@
 (define (merge hts keys) ;; (listof hasheq?) (listof symbol?) -> hasheq?
   (foldl (curryr hasheq-merge keys) (hasheq) hts))
 
-(define (pair->hasheq keys pair) ;; (listof symbol?) pair? -> hasheq?
+(define (kvs->hasheq keys pairs)
+  ;; (listof symbol?) (listof (list/c symbol? any/c)) -> hasheq?
   (match keys
-    [(list) (hasheq (car pair) (cdr pair))]
-    [(list* this more) (hasheq this (pair->hasheq more pair))]))
+    [(list) (apply hasheq (append* pairs))]
+    [(list* this more) (hasheq this (kvs->hasheq more pairs))]))
 
 (module+ test
   (require rackunit)
-  (check-equal? (pair->hasheq '() '(x . 0))
-                (hasheq 'x 0))
-  (check-equal? (pair->hasheq '(a) '(x . 0))
-                (hasheq 'a (hasheq 'x 0)))
-  (check-equal? (pair->hasheq '(a b) '(x . 0))
-                (hasheq 'a (hasheq 'b (hasheq 'x 0)))))
-
-(define (pairs->hasheqs keys pairs)
-  (map (curry pair->hasheq keys) pairs))
+  (check-equal? (kvs->hasheq '() '([x 0][y 1]))
+                (hasheq 'x 0 'y 1))
+  (check-equal? (kvs->hasheq '(a) '([x 0][y 1]))
+                (hasheq 'a (hasheq 'x 0 'y 1)))
+  (check-equal? (kvs->hasheq '(a b) '([x 0][y 1]))
+                (hasheq 'a (hasheq 'b (hasheq 'x 0 'y 1))))
+  (check-equal? (kvs->hasheq '(a) '())
+                (hasheq 'a (hasheq))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; tests
@@ -387,6 +386,12 @@
 (module+ test
   (require rackunit
            racket/format)
+  (check-equal?
+   (parse-toml @~a{[a]})
+   '#hasheq((a . #hasheq())))
+  (check-equal?
+   (parse-toml @~a{[a.b]})
+   '#hasheq((a . #hasheq((b . #hasheq())))))
   (check-equal?
    (parse-toml @~a{today = 2014-06-26T12:34:56Z
                    })
