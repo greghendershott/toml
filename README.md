@@ -1,4 +1,5 @@
-This is a [TOML] parser. As of 2014-06-29 it passes all 64 tests in
+This is a [TOML] parser. It supports TOML v0.20, including
+arrays-of-tables. As of 2014-06-29 it passes all 64 tests in
 [toml-test].
 
 [TOML]: https://github.com/toml-lang/toml
