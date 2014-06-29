@@ -352,13 +352,20 @@
 (define (merge hts keys) ;; (listof hasheq?) (listof symbol?) -> hasheq?
   (foldl (curryr hasheq-merge keys) (hasheq) hts))
 
-(define (kvs->hasheq keys pairs)
+(define (kvs->hasheq keys pairs [orig-keys keys])
   ;; (listof symbol?) (listof (list/c symbol? any/c)) -> hasheq?
   (match keys
-    [(list) (apply hasheq (append* pairs))]
-    [(list* this more) (hasheq this (kvs->hasheq more pairs))]))
+    [(list* this more) (hasheq this (kvs->hasheq more pairs orig-keys))]
+    [(list) (for/fold ([ht (hasheq)])
+                      ([p (in-list pairs)])
+              (match-define (list k v) p)
+              (when (hash-has-key? ht k)
+                (err (cons k (reverse orig-keys)) (hash-ref ht k) v))
+              (hash-set ht k v))]))
 
 (module+ test
+  (check-exn #rx"conflicting values for `a.b.c.x'"
+             (λ () (kvs->hasheq '(a b c) '([x 0][x 1]))))
   (check-equal? (kvs->hasheq '() '([x 0][y 1]))
                 (hasheq 'x 0 'y 1))
   (check-equal? (kvs->hasheq '(a) '([x 0][y 1]))
@@ -373,16 +380,15 @@
 
 (module+ test
   (require racket/format)
-  (check-equal?
-   (parse-toml @~a{[a]})
-   '#hasheq((a . #hasheq())))
-  (check-equal?
-   (parse-toml @~a{[a.b]})
-   '#hasheq((a . #hasheq((b . #hasheq())))))
-  (check-equal?
-   (parse-toml @~a{today = 2014-06-26T12:34:56Z
-                   })
-   `#hasheq((today . ,(date 56 34 12 26 6 2014 0 0 #f 0))))
+  (check-equal? (parse-toml @~a{[a]})
+                '#hasheq((a . #hasheq())))
+  (check-equal? (parse-toml @~a{[a.b]})
+                '#hasheq((a . #hasheq((b . #hasheq())))))
+  (check-equal? (parse-toml @~a{today = 2014-06-26T12:34:56Z})
+                `#hasheq((today . ,(date 56 34 12 26 6 2014 0 0 #f 0))))
+  (check-exn #rx"conflicting values for `x'"
+             (λ () (parse-toml @~a{x=1
+                                   x=2})))
   (check-equal?
    (parse-toml @~a{[[aot.sub]] #comment
                    aot0 = 10
