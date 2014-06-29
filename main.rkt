@@ -279,10 +279,12 @@
        (return (merge (cons (kvs->hasheq '() kvs) tbs)
                       '()))))
 
-;; Main, public function. Returns a `hasheq` using the same
-;; conventions as the Racket `json` library. e.g. You should be able
-;; to give the result to `jsexpr->string`.
-(define (parse-toml s)
+;;; Main, public function. Returns a `hasheq` using the same
+;;; conventions as the Racket `json` library. e.g. You should be able
+;;; to give the result to `jsexpr->string`. EXCEPTION: TOML datetimes
+;;; are parsed to Racket `date` struct values, which do NOT satisfy
+;;; `jsexpr?`.
+(define (parse-toml s) ;; string? -> almost-jsexpr?
   (stx->dat (parse-result $toml-document (string-append s "\n\n"))))
 
 
