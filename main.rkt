@@ -57,11 +57,13 @@
        "zero or more spaces, and optional newline plus zero or more spaces"))
 
 (define $blank-line
-  (try (pdo $sp $newline (return (void)))))
+  (<?> (try (pdo $sp $newline (return (void))))
+       "blank line"))
 
 (define $comment
-  (try (pdo (char #\#) (manyUntil $anyChar $newline)
-            (return null))))
+  (<?> (try (pdo $sp (char #\#) (manyUntil $anyChar $newline)
+                 (return null)))
+       "comment"))
 
 (define $blank-or-comment-line
   (<or> $blank-line $comment))
