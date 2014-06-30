@@ -70,28 +70,30 @@
 ;;; Literal values
 
 (define $string-char
-  (<or> (pdo
-         (char #\\)
-         (<or> (>> (char #\b) (return #\backspace))
-               (>> (char #\n) (return #\newline))
-               (>> (char #\f) (return #\page))
-               (>> (char #\r) (return #\return))
-               (>> (char #\t) (return #\tab))
-               (>> (char #\\) (return #\\))
-               (>> (char #\") (return #\"))
-               (>> (char #\/) (return #\/))
-               (pdo (oneOf "uU")
-                    (cs <- (many $hexDigit))
-                    (return (integer->char (string->number (list->string cs)
-                                                           16))))
-               ))
-        (noneOf "\"\\")))
+  (<?> (<or> (pdo
+              (char #\\)
+              (<or> (>> (char #\b) (return #\backspace))
+                    (>> (char #\n) (return #\newline))
+                    (>> (char #\f) (return #\page))
+                    (>> (char #\r) (return #\return))
+                    (>> (char #\t) (return #\tab))
+                    (>> (char #\\) (return #\\))
+                    (>> (char #\") (return #\"))
+                    (>> (char #\/) (return #\/))
+                    (pdo (oneOf "uU")
+                         (cs <- (many $hexDigit))
+                         (return
+                          (integer->char (string->number (list->string cs)
+                                                         16))))
+                    ))
+             (noneOf "\"\\"))
+       "character or escape character"))
 
 (define $string-lit
   (<?> (try (pdo (char #\")
                  (cs <- (manyUntil $string-char (char #\")))
                  (return (list->string cs))))
-       "double-quoted string value"))
+       "double-quoted string"))
 
 (define $optional-sign
   (<or> (>> (char #\-) (return '(#\-)))
@@ -101,7 +103,7 @@
   (<?> (try (pdo (ss <- $optional-sign)
                  (xs <- (many1 $hexDigit))
                  (return (string->number (list->string (append ss xs))))))
-       "numeric value"))
+       "integer"))
 
 (define $float-lit
   (<?> (try (pdo (ss <- $optional-sign)
@@ -109,7 +111,7 @@
                  (char #\.)
                  (ys <- (many1 $hexDigit))
                  (return (string->number (list->string (append ss xs '(#\.) ys))))))
-       "numeric value"))
+       "float"))
 
 (define $true-lit  (pdo (string "true")  (return #t)))
 (define $false-lit (pdo (string "false") (return #f)))
