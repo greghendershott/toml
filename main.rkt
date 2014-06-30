@@ -1,7 +1,6 @@
 #lang at-exp racket/base
 
 (require "parsack.rkt"
-         "hash-util.rkt"
          racket/string
          racket/list
          racket/date
@@ -395,6 +394,22 @@
                 (hasheq 'a (hasheq 'b (hasheq 'x 0 'y 1))))
   (check-equal? (kvs->hasheq '(a) '())
                 (hasheq 'a (hasheq))))
+
+(define (hash-refs ht keys)
+  (match keys
+    [(list)         ht]
+    [(list* k more) (hash-refs (hash-ref ht k) more)]))
+
+(module+ test
+  (require rackunit)
+  (check-equal? (hash-refs #hasheq([a . 0]) '())
+                #hasheq([a . 0]))
+  (check-equal? (hash-refs #hasheq([a . 0]) '(a))
+                0)
+  (check-equal? (hash-refs #hasheq([a . #hasheq([b . 0])]) '(a b))
+                0)
+  (check-equal? (hash-refs #hasheq([a . #hasheq([b . #hasheq([c . 0])])]) '(a b c))
+                0))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; tests
