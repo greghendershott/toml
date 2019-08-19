@@ -1,4 +1,4 @@
-#lang racket
+#lang racket/base
 
 (require (only-in parsack
                   [parser-compose pdo] ;; More concise, less indent
@@ -20,10 +20,8 @@
                   $space $newline $anyChar $letter $digit $hexDigit
                   $alphaNum $eof
                   getState setState withState
-                  State State? Consumed Consumed! Empty Ok Error Msg
+                  Consumed Empty Ok Error
                   parse parse-result parsack-error parse-source
-                  incr-pos
-                  Pos
                   exn:fail:parsack?))
 
 (provide pdo
@@ -45,14 +43,12 @@
          $space $newline $anyChar $letter $digit $hexDigit
          $alphaNum $eof
          getState setState withState
-         State State? Consumed Consumed! Empty Ok Error Msg
+         Consumed Empty Ok Error
          parse parse-result parsack-error parse-source
-         incr-pos
-         Pos
          exn:fail:parsack?)
 
 (define (getPosition)
-  (match-lambda
-   [(and state (State _ pos -))
-    (Empty (Ok pos state (Msg pos "" null)))]))
+  (λ (in)
+    (define-values (r c pos) (port-next-location in))
+    (Empty (Ok (list r c pos)))))
 (provide getPosition)
