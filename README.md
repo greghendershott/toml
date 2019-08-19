@@ -6,7 +6,7 @@ arrays-of-tables. As of 2014-06-29 it passed all 64 tests in
 [toml-test]: https://github.com/BurntSushi/toml-test
 
 The format came to my attention after I read that Mozilla [Rust]'s
-package manager is using this format. Since there was't currently a
+package manager is using this format. Since there wasn't currently a
 [Racket] parser for TOML, I thought I'd create one.
 
 My motivation was **only** to get more experience using [Parsack] -- a
